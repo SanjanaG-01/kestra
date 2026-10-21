@@ -1,17 +1,21 @@
 package io.kestra.core.services;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.ExecutionOutput;
+import io.kestra.core.models.flows.FlowInterface;
+import io.kestra.core.models.flows.Output;
 import io.kestra.core.repositories.ExecutionOutputRepositoryInterface;
+import io.kestra.core.searchable.SearchableOutput;
+import io.kestra.core.searchable.SearchableOutputRepositoryInterface;
 import io.kestra.core.services.configuration.ExecutionOutputConfiguration;
 import io.kestra.core.storages.NamespaceFactory;
 import io.kestra.core.storages.StorageContext;
 import io.kestra.core.storages.StorageInterface;
+import io.kestra.core.utils.ListUtils;
 import io.kestra.core.utils.MapUtils;
 
 import jakarta.inject.Singleton;
@@ -23,25 +27,45 @@ import jakarta.inject.Singleton;
 @Singleton
 public class ExecutionOutputService extends AbstractOutputService {
     private final ExecutionOutputRepositoryInterface outputRepository;
+    private final SearchableOutputRepositoryInterface searchableOutputRepository;
 
-    public ExecutionOutputService(ExecutionOutputRepositoryInterface outputRepository, StorageInterface storageInterface, NamespaceFactory namespaceFactory,
+
+    public ExecutionOutputService(ExecutionOutputRepositoryInterface outputRepository, SearchableOutputRepositoryInterface searchableOutputRepository, StorageInterface storageInterface, NamespaceFactory namespaceFactory,
         ExecutionOutputConfiguration executionOutputConfiguration) {
         super(storageInterface, namespaceFactory, executionOutputConfiguration.limit());
         this.outputRepository = outputRepository;
+        this.searchableOutputRepository = searchableOutputRepository;
     }
 
     /**
      * Save the outputs of an execution.
-     * The outputs can be either stored directly in the database if they are below the configured limit, or in an internal storage if they exceed the limit.
+     * The outputs can be either stored directly in the database if they are below the configured limit or in an internal storage if they exceed the limit.
+     * <p>
+     * It the output is searchable, it will also be indexed in the dedicated table.
      */
-    public void saveOutputs(Execution execution, Map<String, Object> outputMap) throws InternalException {
+    public void saveOutputs(FlowInterface flow, Execution execution, Map<String, Object> outputMap) throws InternalException {
         if (!MapUtils.isEmpty(outputMap)) {
+            // first: save the outputs in the execution_outputs table
             byte[] value = serialize(outputMap);
             var output = shouldStoreInInternalStorage(value)
                 ? new ExecutionOutput(execution.getId(), execution.getTenantId(), null, storeToInternalStorage(StorageContext.forExecution(execution), value).toString())
                 : new ExecutionOutput(execution.getId(), execution.getTenantId(), value, null);
             outputRepository.save(output);
+
+            // then index any searchable outputs in the dedicated searchable_outputs table
+            ListUtils.emptyOnNull(flow.getOutputs()).stream()
+                .filter(it -> Boolean.TRUE.equals(it.getSearchable()))
+                .map(it  -> new SearchableOutput(execution.getTenantId(), execution.getId(), it.getId(), toString(it, outputMap.get(it.getId()))))
+                .forEach(it -> searchableOutputRepository.save(it));
         }
+    }
+
+    private String toString(Output output, Object value) {
+        return switch(output.getType()) {
+            case STRING, EMAIL, SELECT -> (String) value;
+            case INT, BOOL, FLOAT, URI, DATETIME, DATE, TIME, DURATION -> value.toString();
+            default -> throw new IllegalArgumentException("Unsupported output type for a searchable output: " + output.getType());
+        };
     }
 
     /**

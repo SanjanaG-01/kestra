@@ -9,6 +9,9 @@
                     <KsText class="viewer__breadcrumb" truncated>
                         {{ selectedBase.split('.').join(' › ') }}
                     </KsText>
+                    <KsTag v-if="selectedSearchable" type="warning" size="small" data-test="searchable-tag">
+                        {{ $t("variable_explorer.searchable") }}
+                    </KsTag>
                     <KsIconButton
                         v-if="selectedValue !== undefined && !fileSelectedOutput"
                         :aria-label="$t('copy')"
@@ -31,7 +34,12 @@
                         :options="viewModes"
                         size="small"
                     />
-                    <span v-else-if="selectedBase">{{ selectedBase.split('.').join(' > ') }}</span>
+                    <span v-else-if="selectedBase" class="viewer__title">
+                        {{ selectedBase.split('.').join(' > ') }}
+                        <KsTag v-if="selectedSearchable" type="warning" size="small" data-test="searchable-tag">
+                            {{ $t("variable_explorer.searchable") }}
+                        </KsTag>
+                    </span>
                     <KsIconButton
                         v-if="selectedValue !== undefined && !fileSelectedOutput"
                         :aria-label="$t('copy')"
@@ -191,6 +199,7 @@
         KsButton,
         KsEditor,
         KsJsonTree,
+        KsTag,
         copyToClipboard,
     } from "@kestra-io/design-system"
     import * as OutputsAPI from "@kestra-io/kestra-sdk/outputs"
@@ -261,6 +270,12 @@
         }
         return String(value)
     }
+
+    const searchableOutputIds = computed(() => new Set(
+        (executionsStore.flow?.outputs ?? [])
+            .filter((output) => output.searchable === true)
+            .map((output) => output.id),
+    ))
 
     function itemsFromRecord(record: Record<string, unknown> | undefined, prefix: string): ExplorerItem[] {
         if (!record) return []
@@ -421,7 +436,7 @@
             {key: "triggers", label: t("triggers"), items: itemsFromRecord(triggerRecord(exec?.trigger), "trigger")},
             {key: "inputs", label: t("flow_inputs"), items: itemsFromRecord(exec?.inputs, "inputs")},
             {key: "tasksOutputs", label: t("variable_explorer.tasks_outputs"), items: taskItems.value},
-            {key: "flowOutputs", label: t("flow_outputs"), items: itemsFromRecord(flowOutputs.value, "outputs")},
+            {key: "flowOutputs", label: t("flow_outputs"), items: itemsFromRecord(flowOutputs.value, "outputs").map((item) => ({...item, searchable: searchableOutputIds.value.has(item.label)}))},
         ]
     })
 
@@ -458,6 +473,7 @@
 
     const selectedValue = ref<unknown>(undefined)
     const selectedBase = ref<string>("")
+    const selectedSearchable = ref(false)
     const selectedTaskId = ref<string | undefined>(undefined)
     const expressionPath = ref<string>("")
     const previewedValue = ref<unknown>(undefined)
@@ -516,6 +532,7 @@
             selectedValue.value = item.value
         }
         selectedBase.value = item.expression
+        selectedSearchable.value = item.searchable === true
         detailOpen.value = true
         selectedTaskId.value = (execution.value?.taskRunList ?? [])
             .find((taskRun) => taskRun.id === item.taskRunId)?.taskId
@@ -677,6 +694,12 @@
     gap: var(--ks-spacing-2);
     padding: var(--ks-spacing-3) var(--ks-spacing-4);
     border-bottom: 1px solid var(--ks-border-default);
+}
+
+.viewer__title {
+    display: flex;
+    align-items: center;
+    gap: var(--ks-spacing-2);
 }
 
 .viewer__scalar {

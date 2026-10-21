@@ -9,6 +9,8 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import io.kestra.core.searchable.SearchableOutput;
+import io.kestra.core.searchable.SearchableOutputRepositoryInterface;
 import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.event.Level;
@@ -487,7 +489,7 @@ public class ExecutorService {
             try {
                 Map<String, Object> outputs = inputAndOutput.renderOutputs(flow.getOutputs());
                 outputs = inputAndOutput.typedOutputs(flow, executor.getExecution(), outputs);
-                executionOutputService.saveOutputs(newExecution, outputs);
+                executionOutputService.saveOutputs(flow, newExecution, outputs);
             } catch (Exception e) {
                 Logs.logExecution(
                     executor.getExecution(),

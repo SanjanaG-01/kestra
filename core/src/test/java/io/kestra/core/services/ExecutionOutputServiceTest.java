@@ -9,14 +9,20 @@ import org.junit.jupiter.api.Test;
 import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.flows.Output;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.models.flows.Type;
 import io.kestra.core.repositories.ExecutionOutputRepositoryInterface;
+import io.kestra.core.searchable.SearchableOutput;
+import io.kestra.core.searchable.SearchableOutputRepositoryInterface;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.TestsUtils;
 
 import jakarta.inject.Inject;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @KestraTest
 class ExecutionOutputServiceTest {
@@ -25,6 +31,21 @@ class ExecutionOutputServiceTest {
 
     @Inject
     private ExecutionOutputRepositoryInterface executionOutputRepository;
+
+    @Inject
+    private SearchableOutputRepositoryInterface searchableOutputRepository;
+
+    private Flow flow(Output... outputs) {
+        return Flow.builder()
+            .id("test-flow")
+            .namespace("io.kestra.test")
+            .outputs(List.of(outputs))
+            .build();
+    }
+
+    private Output output(String id, Type type, Boolean searchable) {
+        return Output.builder().id(id).type(type).searchable(searchable).value("{{ outputs.x }}").build();
+    }
 
     private Execution execution(String tenant, State.Type state) {
         return Execution.builder()
@@ -50,7 +71,7 @@ class ExecutionOutputServiceTest {
         );
 
         // When
-        executionOutputService.saveOutputs(execution, outputs);
+        executionOutputService.saveOutputs(flow(), execution, outputs);
 
         // Then
         Map<String, Object> retrieved = executionOutputService.getOutputs(execution);
@@ -73,7 +94,7 @@ class ExecutionOutputServiceTest {
         Execution execution = execution(tenant, State.Type.SUCCESS);
 
         // When
-        executionOutputService.saveOutputs(execution, Collections.emptyMap());
+        executionOutputService.saveOutputs(flow(), execution, Collections.emptyMap());
 
         // Then
         assertThat(executionOutputRepository.findById(tenant, execution.getId())).isEmpty();
@@ -97,7 +118,7 @@ class ExecutionOutputServiceTest {
         // Given
         String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
         Execution execution = execution(tenant, State.Type.SUCCESS);
-        executionOutputService.saveOutputs(execution, Map.of("key", "value"));
+        executionOutputService.saveOutputs(flow(), execution, Map.of("key", "value"));
 
         // When
         Map<String, Object> outputs = executionOutputService.getOutputs(execution.withState(State.Type.RUNNING));
@@ -127,8 +148,8 @@ class ExecutionOutputServiceTest {
         String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
         Execution execution1 = execution(tenant, State.Type.SUCCESS);
         Execution execution2 = execution(tenant, State.Type.SUCCESS);
-        executionOutputService.saveOutputs(execution1, Map.of("key", "value1"));
-        executionOutputService.saveOutputs(execution2, Map.of("key", "value2"));
+        executionOutputService.saveOutputs(flow(), execution1, Map.of("key", "value1"));
+        executionOutputService.saveOutputs(flow(), execution2, Map.of("key", "value2"));
 
         // When
         int purged = executionOutputService.purge(List.of(execution1));
@@ -137,5 +158,78 @@ class ExecutionOutputServiceTest {
         assertThat(purged).isEqualTo(1);
         assertThat(executionOutputRepository.findById(tenant, execution1.getId())).isEmpty();
         assertThat(executionOutputRepository.findById(tenant, execution2.getId())).isPresent();
+    }
+
+    @Test
+    void shouldSaveOnlySearchableOutputs() throws InternalException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Execution execution = execution(tenant, State.Type.SUCCESS);
+        Flow flow = flow(
+            output("name", Type.STRING, true),
+            output("count", Type.INT, true),
+            output("ignored", Type.STRING, false),
+            output("unset", Type.STRING, null)
+        );
+
+        // When
+        executionOutputService.saveOutputs(flow, execution, Map.of("name", "value", "count", 42, "ignored", "a", "unset", "b"));
+
+        // Then
+        assertThat(searchableOutputRepository.findById(tenant, execution.getId(), "name")).contains(new SearchableOutput(tenant, execution.getId(), "name", "value"));
+        assertThat(searchableOutputRepository.findById(tenant, execution.getId(), "count")).contains(new SearchableOutput(tenant, execution.getId(), "count", "42"));
+        assertThat(searchableOutputRepository.findById(tenant, execution.getId(), "ignored")).isEmpty();
+        assertThat(searchableOutputRepository.findById(tenant, execution.getId(), "unset")).isEmpty();
+    }
+
+    @Test
+    void shouldNotSaveSearchableOutputsWhenNoneIsSearchable() throws InternalException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Execution execution = execution(tenant, State.Type.SUCCESS);
+
+        // When
+        executionOutputService.saveOutputs(flow(output("name", Type.STRING, false)), execution, Map.of("name", "value"));
+
+        // Then
+        assertThat(searchableOutputRepository.findById(tenant, execution.getId(), "name")).isEmpty();
+    }
+
+    @Test
+    void shouldNotSaveSearchableOutputsWhenOutputsAreEmpty() throws InternalException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Execution execution = execution(tenant, State.Type.SUCCESS);
+
+        // When
+        executionOutputService.saveOutputs(flow(output("name", Type.STRING, true)), execution, Collections.emptyMap());
+
+        // Then
+        assertThat(searchableOutputRepository.findById(tenant, execution.getId(), "name")).isEmpty();
+    }
+
+    @Test
+    void shouldFailWhenSearchableOutputTypeIsNotSupported() {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Execution execution = execution(tenant, State.Type.SUCCESS);
+
+        // When / Then
+        assertThatThrownBy(() -> executionOutputService.saveOutputs(flow(output("json", Type.JSON, true)), execution, Map.of("json", Map.of("a", "b"))))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void shouldSaveOutputsWhenTheFlowDeclaresNone() throws InternalException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Execution execution = execution(tenant, State.Type.SUCCESS);
+        Flow flowWithoutOutputs = Flow.builder().id("test-flow").namespace("io.kestra.test").build();
+
+        // When
+        executionOutputService.saveOutputs(flowWithoutOutputs, execution, Map.of("key", "value"));
+
+        // Then
+        assertThat(executionOutputService.getOutputs(execution)).containsEntry("key", "value");
     }
 }

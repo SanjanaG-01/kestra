@@ -30,10 +30,15 @@
                             @click="$emit('select', item)"
                         >
                             <span class="key">{{ item.label }}</span>
-                            <KsTag class="card-tag" size="small">{{ item.type }}</KsTag>
-                            <KsTag v-if="item.isExpression" class="card-tag" size="small">
-                                {{ $t("variable_explorer.expression") }}
-                            </KsTag>
+                            <span class="card-tags">
+                                <KsTag v-if="item.searchable" type="warning" size="small" data-test="searchable-tag">
+                                    {{ $t("variable_explorer.searchable") }}
+                                </KsTag>
+                                <KsTag size="small">{{ item.type }}</KsTag>
+                                <KsTag v-if="item.isExpression" size="small">
+                                    {{ $t("variable_explorer.expression") }}
+                                </KsTag>
+                            </span>
                             
                             <code class="preview">{{ item.preview }}</code>
                         </div>
@@ -66,6 +71,7 @@
         preview: string;
         expression: string;
         isExpression?: boolean;
+        searchable?: boolean;
         taskRunId?: string;
         searchText?: string;
     }
@@ -174,7 +180,12 @@
         text-overflow: ellipsis;
     }
 
-    .card-tag{
+    .card-tags {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        min-width: 0;
+        gap: var(--ks-spacing-2);
         grid-area: tag;
         align-self: center;
     }
